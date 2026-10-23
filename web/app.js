@@ -5,7 +5,15 @@ const ABI = [
   "function count() view returns (uint256)",
   "function checks(uint256) view returns (bytes32 subject, bytes32 reportHash, bytes32 serialRoot, uint32 serialCount, uint64 timestamp, address attester, bool doubleClaim, string uri)",
 ];
-const EXAMPLES = ["Shell", "Delta Air Lines", "Netflix, Inc.", "Volkswagen Marke Pkw", "Eni Upstream", "Apple Inc.", "Not Disclosed"];
+// Shortcut cards beside the search: registry name (n), group for the logo (g), and why it is worth a look (why).
+const EXAMPLES = [
+  { n: "Shell", g: "Shell plc", why: "The biggest named buyer" },
+  { n: "Delta Air Lines", g: "Delta Air Lines Inc", why: "An airline's offsets" },
+  { n: "Netflix, Inc.", g: "Netflix, Inc.", why: "A streaming company" },
+  { n: "Volkswagen Marke Pkw", g: "Volkswagen AG", why: "A car maker" },
+  { n: "Eni Upstream", g: "Eni SpA", why: "Own report vs independent estimate" },
+  { n: "Not Disclosed", g: "?", why: "No one named as the claimant" },
+];
 const CAT_COLORS = { redd: "#1d4e89", cookstove: "#e8590c", wind_china: "#4c82c3", ifm_us: "#8a6fb0", hfc23: "#b83a0e",
   grid_re: "#9fb8d6", other: "#d9d4cb" };
 const CCP = { approved: ["CCP-approved methodology", "--a"], not_approved: ["Rejected by ICVCM", "--e"],
@@ -81,7 +89,11 @@ function setupSearch() {
       || `<li aria-disabled="true"><span class="muted">No buyer with that name. Try a shorter part of the name.</span></li>`;
     list.hidden = false; q.setAttribute("aria-expanded", "true");
   };
-  q.addEventListener("input", () => { hits = search(q.value); sel = -1; q.value.trim().length < 2 ? close() : draw(); });
+  q.addEventListener("input", () => {
+    hits = search(q.value); sel = -1; q.value.trim().length < 2 ? close() : draw();
+    const away = q.value.trim() !== ""; // the shortcut cards fold away while you type, and come back when the box is empty
+    $("#examples").classList.toggle("away", away); $("#examples").inert = away;
+  });
   q.addEventListener("keydown", (e) => {
     if (list.hidden) return;
     if (e.key === "ArrowDown") { sel = Math.min(sel + 1, hits.length - 1); draw(); e.preventDefault(); }
@@ -96,11 +108,16 @@ function setupSearch() {
   });
   list.addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) { pick(+li.dataset.i, li.querySelector("span")); close(); } });
   document.addEventListener("click", (e) => { if (!e.target.closest(".search")) close(); });
-  $("#examples").innerHTML = EXAMPLES.map((n) => {
+  logosReady.then(() => $("#examples .pick-list").innerHTML = EXAMPLES.map(({ n, g, why }, k) => {
     const i = rows.findIndex((r) => r[0] === n);
-    return i < 0 ? "" : `<button type="button" data-i="${i}">${esc(n)}</button>`;
-  }).join("");
-  $("#examples").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) pick(+b.dataset.i, b); });
+    if (i < 0) return "";
+    const [, t, kk, e] = rows[i], gr = grade(e, kk, t);
+    return `<button type="button" class="pickcard tinted" data-i="${i}" style="${tint(g, gr)};--k:${k}">
+      ${logo(g, 40)}<span class="pc-body"><span class="pc-name">${esc(n)}</span>${why ? `<span class="pc-why">${esc(why)}</span>` : ""}</span>
+      <span class="chip-grade${gr ? "" : " na"}" data-g="${gr ? gr[1] : ""}" style="background:${gr ? `var(${gr[2]})` : "var(--soft)"}">${gr ? gr[1] : "–"}</span>
+      <span class="pc-meta"><span class="num">${mt(t)}</span><span>${kk ? `${pct(e / kk)} likely real` : "no estimate"}</span></span></button>`;
+  }).join(""));
+  $("#examples").addEventListener("click", (e) => { const b = e.target.closest("[data-i]"); if (b) pick(+b.dataset.i, b.querySelector(".pc-name")); });
 }
 
 // View Transition: the picked name moves into the result title; without support (or with less motion) it just renders.
@@ -230,9 +247,11 @@ async function render(i, scroll = true) {
   CURRENT = i;
   const box = $("#result");
   box.hidden = false;
-  if (scroll) box.innerHTML = `<p class="muted">Loading ${esc(rows[i][0])}…</p>`;
+  const scan = $("#search");
+  if (scroll) { box.innerHTML = `<p class="muted">Loading ${esc(rows[i][0])}…</p>`; scan?.classList.add("scanning"); }
   let o;
   try { o = await owner(i); await Promise.all([logosReady, gapsReady, anomReady]); } catch (err) { box.innerHTML = `<p class="bad">${esc(err.message)}. Check your connection and try again.</p>`; return; }
+  finally { scan?.classList.remove("scanning"); }
   if (CURRENT !== i) return; // a later pick finished loading first: do not draw over it
   const g = grade(o.e, o.k, o.t);
   const group = o.g?.type === "company" ? o.g.group : null;
@@ -254,7 +273,7 @@ async function render(i, scroll = true) {
       <li style="--i:0"><span>Retired for ${esc(short)}, ${span}</span><b class="num">${mt(o.t)}</b></li>
       <li style="--i:1" class="minus"><span>not covered by published research</span><b class="num">−${mt(o.t - o.k)}</b></li>
       ${o.k ? `<li style="--i:2" class="minus"><span>research says likely not real</span><b class="num">−${mt(o.k - o.e)}</b></li>` : ""}
-      <li style="--i:3" class="total"><span>Likely real, best estimate</span><b class="num">${o.k ? mt(o.e) : "no estimate"}</b></li>
+      <li style="--i:3" class="total"><span data-term="likely-real">Likely real, best estimate</span><b class="num">${o.k ? mt(o.e) : "no estimate"}</b></li>
     </ol>
     ${o.k ? `<div class="claim">
       ${claimBar(o.e, o.el, o.eh, o.k)}
@@ -280,7 +299,7 @@ async function render(i, scroll = true) {
     <div class="res-head">
       <div><p class="meta">Retired ${span} · ${fmt(o.r)} retirements</p><div class="res-id">${group ? logo(group, 56) : ""}<h2 class="${short !== o.n ? "addr" : ""}">${esc(o.n)}</h2></div>${buyerLine(o)}
         <p class="muted small">${mt(o.t)} retired${g ? ` · grade on the ${pct(cover)} covered by research` : " · not enough research coverage for a grade"}</p></div>
-      <div class="grade ${g ? "" : "na"}" data-g="${g ? g[1] : ""}" style="${g ? `background:var(${g[2]})` : ""}" role="img" aria-label="Grade ${g ? g[1] : "not available"}">${g ? g[1] : "?"}</div>
+      <div class="grade no-line ${g ? "" : "na"}" data-term="grade" data-g="${g ? g[1] : ""}" style="${g ? `background:var(${g[2]})` : ""}" role="img" aria-label="Grade ${g ? g[1] : "not available"}">${g ? g[1] : "?"}</div>
     </div>
     <p class="plain">${sentence}</p>
     <div class="res-layout">
@@ -291,7 +310,7 @@ async function render(i, scroll = true) {
         ${ANOM[i] ? `<div class="unusual"><b>Unusual pattern</b> <span class="tag">machine learning</span>
           <ul>${ANOM[i].reasons.map((r) => `<li>${esc(r[0].toUpperCase() + r.slice(1))}.</li>`).join("")}</ul>
           <p class="muted small">Flagged by an Isolation Forest model among 540 buyers with at least 100,000 t retired. An unusual pattern is a reason to look closer, not proof of wrongdoing. <a href="data.html#unusual">How it works</a></p></div>` : ""}
-        <div id="chainStatus" class="flag ok">Checking on-chain records…</div>
+        <div id="chainStatus" class="flag ok pending">Checking on-chain records…</div>
         <p class="note"><b>Selling in the EU?</b> Since 27 September 2026, EU Directive 2024/825 bans calling a product climate neutral, reduced or positive because of offsets, whatever the credit quality.</p>
       </div>
       <div class="res-side">
@@ -312,13 +331,32 @@ async function render(i, scroll = true) {
   });
   box.className = "result tinted";
   box.style.cssText = tint(group || o.n, g);
+  glossTips();
   if (!scroll) { chainStatus(o); return; }
   box.classList.remove("in-view");
   await document.fonts.ready; // a shared #buyer-N link renders before the web font: the hero shrinks after it loads
   if (CURRENT !== i) return;
+  window.ScrollTrigger?.refresh(); // the page below moved down; measure before scrolling, a refresh mid-scroll would undo the scroll
   box.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" }); // measured before the entrance offset applies
-  void box.offsetWidth; box.classList.add("in-view");
+  if (window.gsap && !reduced()) printReceipt(box); else { void box.offsetWidth; box.classList.add("in-view"); }
   chainStatus(o);
+}
+
+// The result prints like a receipt: the card unrolls, lines arrive, bars fill, the grade lands, the evidence follows.
+// Numbers are final in every frame; only position, opacity, scale and clip move.
+function printReceipt(box) {
+  const q = (s) => box.querySelectorAll(s);
+  gsap.timeline({ defaults: { ease: "power3.out" } })
+    .fromTo(box, { clipPath: "inset(0 0 100% 0 round 14px)" }, { clipPath: "inset(0 0 0% 0 round 14px)", duration: 0.75, ease: "power2.inOut", clearProps: "clipPath" })
+    .from(q(".res-head > :not(.grade)"), { y: 14, opacity: 0, duration: 0.5 }, 0.15)
+    .from(q(".struk li:not(.minus)"), { x: -14, opacity: 0, duration: 0.45, stagger: 0.09 }, 0.3)
+    .from(q(".struk li.minus"), { x: 16, opacity: 0, duration: 0.45, stagger: 0.09 }, 0.4)
+    .fromTo(q(".struk .total"), { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 0.5, clearProps: "clipPath" }, 0.62)
+    .fromTo(q(".claimbar .range"), { scaleX: 0 }, { scaleX: 1, duration: 0.6 }, 0.7)
+    .fromTo(q(".claimbar .real"), { scaleX: 0 }, { scaleX: 1, duration: 0.75 }, 0.85)
+    .from(q(".grade"), { y: -40, rotate: -12, opacity: 0, duration: 0.65, ease: "back.out(2.6)" }, 1)
+    .from(q(".plain, .claim .key, .res-side .tabs, .res-side .tabpanel:not([hidden]) > *"), { y: 12, opacity: 0, duration: 0.45, stagger: 0.05 }, 0.95)
+    .from(q(".flag, .note, .unusual, .actions"), { y: 10, opacity: 0, duration: 0.4, stagger: 0.07 }, 1.15);
 }
 
 function tabs(root) {
@@ -349,6 +387,8 @@ async function chainStatus(o) {
       : `On-chain record #${last.id} exists but does not match the current data (the dataset was updated after it was published).`;
   } catch {
     el.className = "flag"; el.textContent = CHAIN ? `Could not reach the ${CHAIN.label || CHAIN.network} to check on-chain records.` : "On-chain records are not published for this build yet.";
+  } finally {
+    if (window.gsap && !reduced()) gsap.fromTo(el, { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }); // the answer settles in
   }
 }
 
@@ -422,7 +462,7 @@ async function hiddenSection() {
         <div><b>${KIND[k][0]}</b> <span class="num">${mt(v.t)} · ${pct(v.t / h.total)}</span>${HIDDEN_KINDS.includes(k) ? ` <span class="tag">hidden</span>` : ""}
         <p class="muted small">${KIND[k][2]} ${fmt(v.buyers)} account${v.buyers === 1 ? "" : "s"}.</p></div></div>`).join("")}</div>
     </div>
-    <div class="panel">
+    <div class="panel wide-right">
       <h3>The biggest accounts that hide who claims</h3>
       <div class="tablewrap"><table><thead><tr><th>#</th><th>Account as written in the registry</th><th>What it is</th><th>Tonnes</th><th>Likely real</th></tr></thead><tbody>
       ${h.top.map((x, r) => `<tr><td class="num">${r + 1}</td><td><a href="${buyerHref(x.i)}" class="${x.n.startsWith("0x") ? "mono" : ""}">${esc(x.n)}</a></td>
@@ -503,20 +543,248 @@ async function verifyPanel() {
   }
 }
 
-// One finding under the search, computed from the reviewed company groups with the same grade rule as every result.
-async function finding() {
+/* ---------- story (home): one figure of 100 dots that changes as each chapter scrolls in ---------- */
+// Every number is computed from the same data as the rest of the site; a dot is 1 in 100 tonnes (or one buyer, or one check).
+async function story(m) {
+  const viz = $("#figViz");
+  if (!viz) return;
+  const n100 = (share) => Math.round(share * 100);
+  const spread = (k) => { const s = new Set(); for (let i = 0; s.size < k && i < 400; i++) s.add((i * 37 + 11) % 100); return s; }; // even scatter, same every load
+  // --k = delay in ms by distance from the grid centre, so a recolour spreads out as a ripple
+  const dots = (cls) => { const rows = Math.ceil(cls.length / 20);
+    return `<div class="dots">${cls.map((c, i) => `<i style="--k:${Math.round(Math.hypot(i % 20 - 9.5, Math.floor(i / 20) - (rows - 1) / 2) * 26)}" class="${c}"></i>`).join("")}</div>`; };
+  const hidden = await getJSON("data/hidden.json").catch(() => null);
   await companiesReady;
-  const graded = (COMPANIES || []).map((c) => grade(c.e, c.k, c.t)).filter(Boolean);
-  if (!graded.length) return;
-  const ab = graded.filter((g) => g[1] === "A" || g[1] === "B").length;
-  $("#findingText").textContent = ab
-    ? `${ab} of the ${graded.length} big buyers that research covers well enough to grade reach a B or better.`
-    : `None of the ${graded.length} big buyers that research covers well enough to grade reaches a B.`;
-  $("#finding").hidden = false;
+  const known = n100(m.known / m.tonnes), real = n100(m.eff / m.known), realSet = spread(real);
+  const shares = Object.keys(m.ys).sort().map((y) => [y, m.ys[y][1] / m.ys[y][2]]);
+  const hid = hidden ? ["intermediary", "wallet", "tokenization", "unidentified", "anonymous"].reduce((s, k) => s + (hidden.kinds[k]?.t || 0), 0) / hidden.total : null;
+  const graded = (COMPANIES || []).map((c) => grade(c.e, c.k, c.t)).filter(Boolean).map((g) => g[1]).sort();
+  const count = (l) => graded.filter((g) => g === l).length;
+  const mid = (c) => (c.ct.low + c.ct.high) / 2;
+  const both = (COMPANIES || []).filter((c) => c.rep && c.rep.scope1 && c.ct);
+  const gap = both.filter((c) => mid(c) / c.rep.scope1 >= 2);
+
+  // one 10×10 grid per year: filled dots = likely-real share of measured tonnes; the best year is marked
+  const years = () => {
+    const top = Math.max(...shares.map(([, v]) => v));
+    return `<div class="years" role="img" aria-label="Likely-real share by year">${shares.map(([y, v]) => {
+      const n = Math.round(v * 100);
+      return `<div class="yr${v === top ? " best" : ""}"><div class="dots mini">${Array.from({ length: 100 }, (_, i) => `<i style="--k:${i * 3}" class="${i < n ? "r" : ""}"></i>`).join("")}</div>
+        <span class="num">${pct(v)}</span><span>${y}</span></div>`;
+    }).join("")}</div>`;
+  };
+  // one row per group in the gap: own Scope 1 report next to the independent estimate, one shared scale
+  const gapBars = () => {
+    const rows = gap.slice().sort((a, b) => mid(b) / b.rep.scope1 - mid(a) / a.rep.scope1);
+    const max = Math.max(...rows.flatMap((c) => [c.rep.scope1, mid(c)]));
+    const o = matchMedia("(max-width: 640px)").matches ? 1.45 : 1; // phones draw labels larger (style.css), so rows get more room
+    const W = 520, RH = 70 * o, barW = 340, H = rows.length * RH + 8;
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Reported Scope 1 next to the independent estimate">
+      ${rows.map((c, i) => {
+        const y = i * RH + 16 * o, rw = c.rep.scope1 / max * barW, iw = mid(c) / max * barW;
+        return `<text x="0" y="${y}" fill="${css("--ink")}">${esc(c.group)}</text>
+        <rect x="0" y="${y + 10 * o}" height="${14 * o}" width="${rw}" fill="${css("--accent")}"/><text x="${rw + 8}" y="${y + 21 * o}">${mt(c.rep.scope1)}</text>
+        <rect x="0" y="${y + 30 * o}" height="${14 * o}" width="${iw}" fill="${css("--pale")}"/><text x="${iw + 8}" y="${y + 41 * o}">${mt(mid(c))}</text>`;
+      }).join("")}</svg>`;
+  };
+  const STATES = [
+    { big: mt(m.tonnes), cap: "retired since 2020, each counted as a real tonne", src: "Verra and Gold Standard, Berkeley Voluntary Registry Offsets Database v2026-08",
+      viz: () => dots(Array(100).fill("r")), legend: [["r", "each dot: 1 in 100 tonnes, all counted as real"]] },
+    { big: `${known} of 100`, cap: "tonnes come from kinds of project that research has measured", src: "A kind counts only when Berkeley, CarbonPlan and the methodology code agree",
+      viz: () => dots(Array.from({ length: 100 }, (_, i) => (i < known ? "r" : "x"))), legend: [["r", "measured by research"], ["x", "no published estimate"]] },
+    { big: `${real} of 100`, cap: `measured tonnes likely cut real emissions (range ${pct(m.eff_lo / m.known)} to ${pct(m.eff_hi / m.known)})`, src: "Probst et al. 2024, Nature Communications, applied per kind of project",
+      viz: () => dots(Array.from({ length: 100 }, (_, i) => (realSet.has(i) ? "r" : ""))), legend: [["r", "likely a real cut"], ["", "counted, not real"]] },
+    { big: `${pct(Math.min(...shares.map((s) => s[1])))} to ${pct(Math.max(...shares.map((s) => s[1])))}`, cap: "likely real, every year since 2020", src: "Measured tonnes by year of retirement; 2026 up to August",
+      viz: years, legend: [["r", "likely a real cut"], ["", "counted, not real"]] },
+    hid === null ? null : { big: `${n100(hid)} of 100`, cap: "tonnes since 2020 name no one you could hold to the claim", src: "Beneficiary field of every retirement, reviewed by hand for the largest accounts",
+      viz: () => { const s = spread(n100(hid)); return dots(Array.from({ length: 100 }, (_, i) => (s.has(i) ? "x" : "r"))); }, legend: [["r", "a named claimant"], ["x", "no one named"]] },
+    { big: `${graded.filter((g) => g === "A" || g === "B").length} of ${graded.length}`, cap: "big buyers that research covers well enough to grade reach a B", src: "Netra grades: A at least 60% likely real, B 40 to 60%, C 20 to 40%, D 10 to 20%, E under 10%",
+      viz: () => dots(graded.map((g) => `g${g.toLowerCase()}`)), legend: ["A", "B", "C", "D", "E"].filter(count).map((l) => [`g${l.toLowerCase()}`, `${l}: ${count(l)}`]) },
+    { big: `${gap.length} of ${both.length}`, cap: "reviewed groups whose independent estimate is at least twice their own Scope 1 report", src: "Company reports, read by hand; Climate TRACE v5.7.0 ownership data. Different boundaries, never merged",
+      viz: gapBars, legend: [["r", "own report, Scope 1"], ["", "independent estimate (Climate TRACE)"]] },
+    { big: "…", cap: "checks on a public blockchain", src: "ClaimRegistry on the Ethereum Sepolia test network", viz: () => "", legend: [], chain: true },
+    { big: "27 Sep 2026", cap: "EU ban on offset-based climate-neutral claims for products", src: "Directive (EU) 2024/825", viz: () => "", legend: [] },
+  ];
+  const CHAIN_AT = STATES.findIndex((s) => s && s.chain);
+  let chainFlags = []; // morph: one big dot per published check, true when flagged
+  // The chain chapter waits for the chain: one dot per published check, flagged double claims marked.
+  onchain.then((list) => {
+    chainFlags = list.map((c) => c.doubleClaim);
+    const flagged = list.filter((c) => c.doubleClaim).length;
+    Object.assign(STATES[CHAIN_AT], { big: `${list.length} checks`, cap: `on a public blockchain; ${flagged} flagged as double claims`,
+      viz: () => dots(list.map((c) => (c.doubleClaim ? "ge" : "r"))), legend: [["r", "a published check"], ["ge", "flagged: serials claimed twice"]] });
+    if (current === CHAIN_AT) { current = -1; show(CHAIN_AT); }
+  }).catch(() => Object.assign(STATES[CHAIN_AT], { big: "Offline", cap: "the test network did not answer; the records stay public on the block explorer" }));
+
+  // G = GSAP when it loaded and the device allows full motion; otherwise the CSS transitions alone
+  const G = window.gsap && !reduced() ? gsap : null;
+  const chapters = [...document.querySelectorAll(".chapter")];
+  // PROTOTYPE: two ways to tell the story, compared side by side. ?story=film pins the story like a film (captions change
+  // in place while the figure plays); anything else is "calm": the notes scroll by and the figure crossfades slowly.
+  // The one not chosen is deleted afterwards.
+  const mode = new URLSearchParams(location.search).get("story");
+  const morph = !!G && !!window.ScrollTrigger && mode === "morph";
+  const film = morph || (!!G && !!window.ScrollTrigger && mode === "film"); // morph plays on the film's pinned stage
+  document.documentElement.dataset.story = morph ? "morph" : film ? "film" : "calm";
+
+  // PROTOTYPE "morph": the same 100 dots stay on screen the whole story and move from one picture to the next as you scroll.
+  // layout(s) says where each dot sits in chapter s; paint(p) blends two chapters' layouts for a scroll position p.
+  let paint = null;
+  if (morph) {
+    viz.innerHTML = `<div class="m-dots">${"<i></i>".repeat(100)}</div><div class="m-labels">${shares.map(([y, v]) => `<span><b>${pct(v)}</b>${y}</span>`).join("")}</div><div class="m-svg"></div>`;
+    viz.classList.add("morph");
+    const dotsEl = [...viz.querySelectorAll(".m-dots i")], labels = [...viz.querySelectorAll(".m-labels span")], svg = viz.querySelector(".m-svg");
+    const hidSet = hid === null ? new Set() : spread(n100(hid));
+    // years: 100 dots shared out over the 7 columns in proportion to each year's likely-real share (2021 is the tallest)
+    const sum = shares.reduce((s, [, v]) => s + v, 0), heights = shares.map(([, v]) => Math.round(v / sum * 100));
+    heights[heights.length - 1] += 100 - heights.reduce((a, b) => a + b, 0);
+    const colOf = [], rowOf = [];
+    heights.forEach((h, c) => { for (let r = 0; r < h; r++) { colOf.push(c); rowOf.push(r); } });
+    const layout = (s) => {
+      const W = viz.clientWidth, H = viz.clientHeight, d = Math.min(W / 22, 17), out = [];
+      viz.style.setProperty("--md", `${(d * 0.78).toFixed(1)}px`); // dot size follows the spacing, so dots never touch on a phone
+      const at = (j, cols, cx, cy, rows, k = d) => ({ x: cx + (j % cols - (cols - 1) / 2) * k, y: cy + (Math.floor(j / cols) - (rows - 1) / 2) * k });
+      const colX = (c) => W * (0.08 + c * (0.84 / (shares.length - 1)));
+      for (let i = 0; i < 100; i++) {
+        let p = { ...at(i, 20, W / 2, H / 2, 5), c: "r", o: 1, s: 1 };
+        if (s === 1 || s === 2) {
+          p = i < known ? { ...at(i, 7, W * 0.27, H / 2, Math.ceil(known / 7)), c: s === 1 || i < real ? "r" : "", o: 1, s: 1 }
+            : { ...at(i - known, 9, W * 0.7, H / 2, Math.ceil((100 - known) / 9)), c: "x", o: s === 1 ? 1 : 0.22, s: 1 };
+        }
+        if (s === 3) p = { x: colX(colOf[i]) + (rowOf[i] % 2 - 0.5) * d, y: H * 0.74 - Math.floor(rowOf[i] / 2) * d, c: "r", o: 1, s: 1 };
+        if (s === 4) p.c = hidSet.has(i) ? "x" : "r";
+        if (s === 5) p = i < graded.length ? { ...at(i, 13, W / 2, H / 2, Math.ceil(graded.length / 13)), c: `g${graded[i].toLowerCase()}`, o: 1, s: 1 } : { ...p, c: "", o: 0, s: 0 };
+        if (s === 6 || s === 8) p = { ...p, o: 0, s: 0.3 };
+        if (s === 7) p = i < chainFlags.length ? { ...at(i, chainFlags.length, W / 2, H / 2, 1, d * 2.4), c: chainFlags[i] ? "ge" : "r", o: 1, s: 2 } : { ...p, o: 0, s: 0 };
+        out.push(p);
+      }
+      return { dots: out, colX };
+    };
+    const sm = (t) => t * t * (3 - 2 * t);
+    paint = (p) => {
+      const n = chapters.length, k = Math.max(0, Math.min(Math.floor(p), n - 1)), f = sm(Math.max(0, Math.min(1, (p - k - 0.55) / 0.45)));
+      const sa = +chapters[k].dataset.s, sb = +(chapters[k + 1] || chapters[k]).dataset.s, A = layout(sa), B = layout(sb);
+      dotsEl.forEach((el, i) => {
+        const a = A.dots[i], b = B.dots[i];
+        el.style.transform = `translate(${a.x + (b.x - a.x) * f}px, ${a.y + (b.y - a.y) * f}px) scale(${a.s + (b.s - a.s) * f})`;
+        el.style.opacity = a.o + (b.o - a.o) * f;
+        el.className = f < 0.5 ? a.c : b.c;
+      });
+      const w = (s) => (sa === s ? 1 - f : 0) + (sb === s ? f : 0); // how much of chapter s is on screen
+      labels.forEach((l, c) => { l.style.left = `${A.colX(c)}px`; });
+      viz.querySelector(".m-labels").style.opacity = w(3);
+      if (w(6) > 0 && !svg.innerHTML) svg.innerHTML = gapBars();
+      svg.style.opacity = w(6);
+    };
+    document.addEventListener("themechange", () => { svg.innerHTML = ""; });
+  }
+
+  let current = -1;
+  const show = (s) => {
+    const st = STATES[s];
+    if (!st || s === current) return;
+    current = s;
+    const swaps = document.querySelectorAll(".figure .swap");
+    swaps.forEach((el) => el.classList.add("out"));
+    const draw = () => {
+      $("#figBig").textContent = st.big; $("#figCap").textContent = st.cap; $("#figSrc").textContent = st.src;
+      $("#figLegend").innerHTML = st.legend.map(([c, t]) => `<span class="${c}">${esc(t)}</span>`).join("");
+      swaps.forEach((el) => el.classList.remove("out"));
+      if (!G) return;
+      if (film) G.fromTo(["#figBig", "#figCap", "#figSrc"], { y: 18, opacity: 0, filter: "blur(6px)" }, { y: 0, opacity: 1, filter: "blur(0px)", duration: 0.7, stagger: 0.07, ease: "power3.out", overwrite: true });
+      else G.fromTo(["#figBig", "#figCap", "#figSrc"], { opacity: 0 }, { opacity: 1, duration: 0.9, stagger: 0.08, ease: "power1.out", overwrite: true });
+    };
+    // dots recolour in place (a ripple from the centre); a different kind of figure is swapped and drawn in
+    if (morph) { reduced() ? draw() : setTimeout(draw, 160); chapters.forEach((el) => el.classList.toggle("on", +el.dataset.s === s)); return; } // morph: paint() moves the dots
+    const html = st.viz(), next = new DOMParser().parseFromString(html, "text/html").querySelectorAll(".dots i"), now = viz.querySelectorAll(".dots i");
+    if (next.length && next.length === now.length) now.forEach((el, i) => (el.className = next[i].className));
+    else {
+      viz.innerHTML = html;
+      if (G && film) {
+        G.from(viz.querySelectorAll(".dots i"), { scale: 0, duration: 0.5, ease: "back.out(2)", stagger: { grid: "auto", from: "center", amount: 0.45 } });
+        G.from(viz.querySelectorAll("rect"), { scaleX: 0, transformOrigin: "0% 50%", duration: 0.8, stagger: 0.07, ease: "power3.out" });
+      } else if (G) G.fromTo(viz, { opacity: 0 }, { opacity: 1, duration: 0.9, ease: "power1.out", overwrite: true }); // calm: the new figure simply fades in (fromTo: a quick second change must not freeze it half-faded)
+    }
+    reduced() ? draw() : setTimeout(draw, 160);
+    chapters.forEach((el) => el.classList.toggle("on", +el.dataset.s === s));
+  };
+  show(0);
+  const narrow = matchMedia("(max-width: 860px)").matches;
+  if (film) {
+    // the story is pinned; each caption fades in where the last one was, and the figure follows the caption on screen
+    gsap.registerPlugin(ScrollTrigger);
+    const n = chapters.length;
+    G.set(chapters.slice(1), { autoAlpha: 0, y: 40 });
+    const tl = G.timeline({ defaults: { ease: "power2.inOut" }, scrollTrigger: { trigger: ".story-grid", pin: true, start: "top top", end: `+=${n * 85}%`, scrub: 0.6,
+      // morph: the number changes when the dots change colour (halfway through the move, 0.775 into a chapter), with the caption
+      onUpdate: (t) => { show(+chapters[Math.min(n - 1, Math.floor(t.progress * n + (paint ? 0.225 : 0)))].dataset.s); if (paint) paint(t.progress * n); },
+      onRefresh: (t) => paint && paint(t.progress * n) } });
+    chapters.forEach((el, i) => {
+      if (i) tl.to(el, { autoAlpha: 1, y: 0, duration: 0.25 }, i);
+      if (i < n - 1) tl.to(el, { autoAlpha: 0, y: -40, duration: 0.25 }, i + 0.75);
+    });
+    tl.set({}, {}, n); // one unit of scroll per chapter
+  } else if (window.ScrollTrigger) {
+    gsap.registerPlugin(ScrollTrigger);
+    // the chapter nearest a reading line owns the figure (the middle of the screen; lower on phones, where the figure sits on top).
+    // One rule for every scroll position, so there is never a gap or an overlap between chapters.
+    const nearest = () => {
+      const y = innerHeight * (narrow ? 0.72 : 0.5);
+      let best = chapters[0], d = Infinity;
+      for (const el of chapters) { const r = el.getBoundingClientRect(), dd = r.top > y ? r.top - y : r.bottom < y ? y - r.bottom : 0; if (dd < d) { d = dd; best = el; } }
+      show(+best.dataset.s);
+    };
+    ScrollTrigger.create({ trigger: ".chapters-list", start: "top bottom", end: "bottom top", onUpdate: nearest, onRefresh: nearest });
+    if (G) chapters.forEach((el) => {
+      // calm: a note arrives paragraph by paragraph, slowly, as you reach it
+      G.from(el.children, { y: 10, opacity: 0, duration: 1, stagger: 0.22, ease: "power1.out", scrollTrigger: { trigger: el, start: "top 80%", once: true } });
+      // phones: a note fades as it rises over the pinned figure, so it never hides the number it explains
+      if (narrow) G.to(el, { opacity: 0, ease: "none", scrollTrigger: { trigger: el, start: "bottom 62%", end: "bottom 38%", scrub: true } });
+    });
+  } else {
+    const io = new IntersectionObserver((es) => es.forEach((e) => e.isIntersecting && show(+e.target.dataset.s)),
+      { rootMargin: narrow ? "-62% 0px -30% 0px" : "-45% 0px -45% 0px" });
+    chapters.forEach((el) => io.observe(el));
+  }
+  document.addEventListener("themechange", () => { const s = current; current = -1; show(s); });
+  // contour lines behind the story, drawn wider than the box so they can drift sideways
+  let t = "";
+  for (let k = 0; k < 74; k++) {
+    let p = "";
+    for (let x = -120; x <= 1400; x += 40) p += `${x > -120 ? " L" : "M"}${x} ${(40 + k * 54 + Math.sin(x / 170 + k * 0.7) * 22 + Math.cos(x / 90 + k) * 9).toFixed(1)}`;
+    t += `<path d="${p}"/>`;
+  }
+  $("#topo").innerHTML = t;
+  if (G) G.timeline({ scrollTrigger: { trigger: ".field", start: "top bottom", end: "bottom top", scrub: 1.2 } })
+    .to("#topo path:nth-child(odd)", { x: 70, ease: "none" }, 0).to("#topo path:nth-child(even)", { x: -70, ease: "none" }, 0);
+  // the page grew while data loaded (and a reload may restore a deep scroll): measure the triggers again
+  if (window.ScrollTrigger) { ScrollTrigger.refresh(); document.fonts.ready.then(() => ScrollTrigger.refresh()); }
 }
 
 /* ---------- boot ---------- */
+// Page motion with GSAP (home hero, sections rising in). Without GSAP or with less motion the CSS entrances stay.
+function motion() {
+  if (!window.gsap || !window.ScrollTrigger || reduced()) return;
+  gsap.registerPlugin(ScrollTrigger);
+  document.documentElement.classList.add("gsap");
+  const hero = $(".hero");
+  if (hero) {
+    gsap.timeline({ defaults: { ease: "power3.out" } })
+      .fromTo(".hero > img", { scale: 1.12 }, { scale: 1.02, duration: 2.8, ease: "power2.out" }, 0)
+      .from(".hero .t > *", { y: 28, opacity: 0, duration: 0.9, stagger: 0.12 }, 0.15);
+    gsap.to(".hero > img", { yPercent: 10, ease: "none", scrollTrigger: { trigger: hero, start: "top top", end: "bottom top", scrub: true } });
+    gsap.to(".hero .t", { y: -60, opacity: 0.25, ease: "none", scrollTrigger: { trigger: hero, start: "center center", end: "bottom top", scrub: true } });
+  }
+  // only what starts below the fold is hidden first, so nothing on screen blinks
+  const rise = gsap.utils.toArray(".check-head, .check-grid, .block > h2, .block > .lede, .block > .panel, .onward > h2, .onward li, .chapters > section > h2, .chapters > section > .lede")
+    .filter((el) => el.getBoundingClientRect().top > innerHeight);
+  gsap.set(rise, { opacity: 0, y: 26 });
+  ScrollTrigger.batch(rise, { start: "top 90%", once: true, onEnter: (els) => gsap.to(els, { opacity: 1, y: 0, duration: 0.8, stagger: 0.08, ease: "power3.out", clearProps: "transform,opacity" }) });
+  // clearProps: a leftover transform makes a stacking context, which trapped the search dropdown under the next section
+}
+
 (async function boot() {
+  motion();
   try {
     [INDEX, FACTORS] = await Promise.all([getJSON("data/index.json"), getJSON("data/factors.json")]);
     CHAIN = await getJSON("data/deployment.json").catch(() => null);
@@ -528,7 +796,8 @@ async function finding() {
   if ($("#ownerCount")) $("#ownerCount").textContent = fmt(rows.length);
   onchain = loadChecks();
   onchain.catch(() => {}); // pages without a chain view must not log an unhandled rejection
-  if (ON_CHECK) { setupSearch(); finding(); }
+  if (ON_CHECK) setupSearch();
+  story(INDEX.meta);
   market(INDEX.meta);
   hiddenSection();
   verifyPanel();
